@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ledger: ${{ steps.filter.outputs.ledger }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      mock-bank: ${{ steps.filter.outputs.mock-bank }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ledger:
+              - 'services/ledger/**'
+              - '.github/workflows/ci.yml'
+            gateway:
+              - 'services/gateway/**'
+              - '.github/workflows/ci.yml'
+            mock-bank:
+              - 'services/mock-bank/**'
+              - '.github/workflows/ci.yml'
+
+  ledger:
+    needs: changes
+    if: needs.changes.outputs.ledger == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ledger
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore Ledger.sln
+      - name: Build
+        run: dotnet build Ledger.sln --no-restore -c Release
+      - name: Lint
+        run: dotnet format Ledger.sln --verify-no-changes --no-restore
+      - name: Test
+        run: dotnet test Ledger.sln --no-build -c Release
+      - name: Docker build
+        run: docker build -t payments-ledger/ledger:ci .
+
+  gateway:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy app tests
+      - name: Test
+        run: uv run pytest
+      - name: Docker build
+        run: docker build -t payments-ledger/gateway:ci .
+
+  mock-bank:
+    needs: changes
+    if: needs.changes.outputs.mock-bank == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/mock-bank
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Test
+        run: uv run pytest
+      - name: Docker build
+        run: docker build -t payments-ledger/mock-bank:ci .
